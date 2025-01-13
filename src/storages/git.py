@@ -119,3 +119,41 @@ class GitRepository:
         config.set("core", "bare", "false")
 
         return config
+
+    @classmethod
+    def repository_find(
+        cls, path: str = ".", required: bool = True
+    ) -> None | GitRepository:
+        path = os.path.realpath(path)
+
+        if os.path.isdir(os.path.join(path, ".git")):
+            return GitRepository(path)
+
+        parent = os.path.realpath(os.path.join(path, ".."))
+
+        if parent == path:
+            if required:
+                raise Exception("No git directory.")
+            else:
+                return None
+
+        return cls.repository_find(parent, required)
+
+    def reference_resolve(self, reference: str) -> str | None:
+        path = self.repository_file(reference)
+
+        # Sometimes, an indirect reference may be broken.  This is normal
+        # in one specific case: we're looking for HEAD on a new repository
+        # with no commits.  In that case, .git/HEAD points to "ref:
+        # refs/heads/main", but .git/refs/heads/main doesn't exist yet
+        # (since there's no commit for it to refer to).
+        if not os.path.isfile(path):  # type: ignore
+            return None
+
+        with open(path, "r") as fp:  # type: ignore
+            data = fp.read()[:-1]
+            # Drop final \n ^^^^^
+        if data.startswith("ref: "):
+            return self.reference_resolve(data[5:])
+        else:
+            return data
