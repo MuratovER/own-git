@@ -75,45 +75,47 @@ class GitService:
                     f.write(zlib.compress(result))
         return sha_hash
 
-    def object_find(self, name: str, fmt=None, follow: bool = True):
-        sha = self.object_resolve(name)
+    def object_find(
+        self, name: str, fmt: bytes | None = None, follow: bool = True
+    ) -> str | None:
+        sha_hashes = self.object_resolve(name)
 
-        if not sha:
+        if not sha_hashes:
             raise Exception(f"No such reference {name}.")
 
-        if len(sha) > 1:
+        if len(sha_hashes) > 1:
             raise Exception(
                 "Ambiguous reference {name}: Candidates are:\n - {'\n - '.join(sha)}."
             )
 
-        sha = sha[0]
+        sha_hash = sha_hashes[0]
 
         if not fmt:
-            return sha
+            return sha_hash
 
         while True:
-            obj = self.object_read(sha)
+            obj = self.object_read(sha_hash)
 
             if not obj:
                 raise Exception("There are no objects")
 
             if obj.fmt == fmt:
-                return sha
+                return sha_hash
 
             if not follow:
                 return None
 
-            # Follow tags
-            if not obj.__getattribute__("kvlm"):
+            if hasattr(obj, "kvlm"):
                 if obj.fmt == b"tag":
-                    sha = obj.kvlm[b"object"].decode("ascii")  # type: ignore
+                    sha_hash = obj.kvlm[b"object"].decode("ascii")  # type: ignore
                 elif obj.fmt == b"commit" and fmt == b"tree":
-                    sha = obj.kvlm[b"tree"].decode("ascii")  # type: ignore
+                    sha_hash = obj.kvlm[b"tree"].decode("ascii")  # type: ignore
                 else:
                     return None
 
-    def object_hash(self, fd, fmt):
+    def object_hash(self, fd, fmt: bytes) -> str | None:
         """Hash object, writing it to repo if provided."""
+        git_object: GitObject
         data = fd.read()
 
         # Choose constructor according to fmt argument
@@ -125,11 +127,11 @@ class GitService:
             case b"blob":
                 git_object = GitBlob(data)
             case _:
-                raise Exception(f"Unknown type {fmt}!")
+                raise Exception(f"Unknown type {fmt.decode('utf-8')}!")
 
         return self.object_write(git_object)
 
-    def object_resolve(self, name):
+    def object_resolve(self, name: str):
         """Resolve name to an object hash in repo.
 
         This function is aware of:
@@ -156,15 +158,13 @@ class GitService:
             # minimal length for git to consider something a short hash.
             # This limit is documented in man git-rev-parse
             name = name.lower()
-            prefix = name[0:2]
+            prefix = name[0:2].encode("utf-8")
             path = self.repository.repository_dir("objects", prefix, mkdir=False)
             if path:
                 rem = name[2:]
-                for f in os.listdir(path):
-                    if f.startswith(rem):
-                        # Notice a string startswith() itself, so this
-                        # works for full hashes.
-                        candidates.append(prefix + f)
+                for file in os.listdir(path):
+                    if file.startswith(rem):  # type: ignore
+                        candidates.append(prefix + file.decode("utf-8"))  # type: ignore
 
         as_tag = self.repository.reference_resolve("refs/tags/" + name)
         if as_tag:
@@ -173,3 +173,5 @@ class GitService:
         as_branch = self.repository.reference_resolve("refs/heads/" + name)
         if as_branch:
             candidates.append(as_branch)
+
+        return candidates if candidates else None
